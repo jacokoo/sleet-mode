@@ -11,34 +11,39 @@
     (when (re-search-forward "\n\\([ \t]+\\)[^ \t]+")
       (match-string 1))))
 
-(defun sleet-font-lock-region-backward-set-block-region ()
+(defun sleet-get-block-region ()
   "Set font-lock-beg and font-lock-end to current block."
   (beginning-of-line)
-  (when (re-search-forward "\\([ \t]+\\)[^ \t]+[^\n]*\\.[ \t]*\n\\(\\1[ \t]+[^\n]*\n?\\|^[ \t]*\n\\)+" nil t)
-    (setq font-lock-beg (match-beginning 0))
-    (setq font-lock-end (1- (match-end 0))) t))
+  (when (re-search-forward "^\\([ \t]+\\)[^ \t\n]+[^\n]*\\.[ \t]*\n\\(\\1[ \t]+[^\n]*\n?\\|^[ \t]*\n\\)+" nil t)
+    (cons (match-beginning 0) (1- (match-end 0)))))
 
-(defun sleet-font-lock-region-backward (matcher)
+(defun sleet-font-lock-region-backward (beg)
   "Find the nearest parent line, and call the matcher.
 MATCHER is used to test if the current if a block starter."
 
+  (goto-char beg)
   (beginning-of-line)
   (when (re-search-forward "^\\([ \t]+\\)[^ \t]+" (line-end-position) t)
     (let ((tl (1- (length (match-string 1)))))
       (when (re-search-backward (concat "^\\([ \t]\\)\\{," (number-to-string tl) "\\}[^ \t\n]+") nil t)
         (beginning-of-line)
-        (if (funcall matcher)
-            (sleet-font-lock-region-backward-set-block-region)
-          (sleet-font-lock-region-backward matcher))))))
+        (let ((bb (match-beginning 0)))
+        (if (re-search-forward "^[ \t]*[^\n]+\\.[ \t]*$" (line-end-position) t)
+            (sleet-get-block-region)
+          (sleet-font-lock-region-backward bb)))))))
 
 (defun sleet-font-lock-region-forward ()
   "Look forward to enlarge font lock region."
-  (goto-char font-lock-beg)
+  (goto-char (1+ font-lock-end))
   (beginning-of-line)
-  (let ((pp (point)))
-    (when (re-search-forward "\\([ \t]+\\)[^ \t]+[^\n]*\\.[ \t]*\n\\(\\1[ \t]+[^\n]*\n?\\|^[ \t]*\n\\)+" font-lock-end t)
+  (let ((pp font-lock-beg))
+    (when (re-search-backward "^\\([ \t]+\\)[^ \t\n]+[^\n]*\\.[ \t]*\n\\(\\1[ \t]+[^\n]*\n?\\|^[ \t]*\n\\)+" font-lock-beg t)
       (setq font-lock-beg (min pp (match-beginning 0)))
-      (setq font-lock-end (max font-lock-end (1- (match-end 0)))) t)))
+      (message "forward start set to [%s]" font-lock-beg)
+      (let ((ee (match-end 0)) (token (match-string 1)))
+        (when (and (eq ee font-lock-end) (re-search-forward (concat "\\(^" token "[ \t]+[^\n]*\n?\\|^[ \t]*\n\\)+") nil t))
+          (setq font-lock-end (max font-lock-end (1- (match-end 0))))
+          (message "forward end set to [%s]" font-lock-end) t)))))
 
 (defun sleet-font-lock-region-start-from-beginning ()
   "Each region should start from beginning of line."
@@ -46,16 +51,25 @@ MATCHER is used to test if the current if a block starter."
   (let ((pp (point)))
     (beginning-of-line)
     (when (/= pp (point))
+      (message "beginning [%s]" (min pp (point)))
       (setq font-lock-beg (min pp (point))) t)))
 
 (defun sleet-extend-font-lock-region ()
   "Function that used to unsure font lock region."
+  (message "extend region from [%s, %s]" font-lock-beg font-lock-end)
   (save-excursion
     (or
-     (sleet-font-lock-region-backward (lambda () (re-search-forward "^[ \t]*[^\n]+\\.[ \t]*$" (line-end-position) t)))
      (sleet-font-lock-region-forward)
      (sleet-font-lock-region-start-from-beginning)
      )))
+
+(defun sleet-font-lock-after-change (beg end old-len)
+  "Get the correct region after changed"
+  (message "after change [%s, %s, %s]" beg end old-len)
+  (save-excursion
+    (let ((result (sleet-font-lock-region-backward beg)))
+      (when result
+        (message "result [%s]" result) result))))
 
 (defun sleet-highlight-comment-block (limit)
   "Highlight comment block.  LIMIT is feeded by font-lock."
@@ -93,10 +107,12 @@ MATCHER is used to test if the current if a block starter."
   (set (make-local-variable 'comment-start) "\\(# \\)")
   (set (make-local-variable 'comment-end) "")
 
-  (setq font-lock-extend-region-functions '(sleet-extend-font-lock-region))
-  (set (make-local-variable 'jit-lock-contextually) t)
   (set (make-local-variable 'font-lock-multiline) t)
-  (setq font-lock-defaults '(sleet-font-lock-keywords)))
+  (setq font-lock-defaults '(sleet-font-lock-keywords))
+  (make-local-variable 'font-lock-extend-region-functions)
+  (add-hook 'font-lock-extend-region-functions 'sleet-extend-font-lock-region)
+  (setq font-lock-extend-after-change-region-function 'sleet-font-lock-after-change)
+  )
 
 (add-to-list 'auto-mode-alist '("\\.sleet$" . sleet-mode))
 
