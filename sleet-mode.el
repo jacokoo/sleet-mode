@@ -12,7 +12,7 @@
       (match-string 1))))
 
 (defconst sleet-re-identifier "[a-zA-Z$@_][a-zA-Z0-9$_\-]*")
-(defconst sleet-re-tag-name (concat "\\(" sleet-re-identifier ":\\)?\\(" sleet-re-identifier "\\)"))
+(defconst sleet-re-tag-name (concat "\\(" sleet-re-identifier ":\\)?\\(" sleet-re-identifier "\\|#\\(?: \\|\\.\\)\\||\\)"))
 (defconst sleet-re-class-selector (concat "\\(\\." sleet-re-identifier "\\)"))
 (defconst sleet-re-id-selector (concat "\\(#" sleet-re-identifier "\\)"))
 (defconst sleet-re-inline-indicator "\\([><:+][ \t]+\\)")
@@ -67,7 +67,7 @@
 LIMIT the end position to do search."
 
   ;; start with tag name or class selector or id selector
-  (message "whole line (%s, %s)" (point) limit)
+  ;; (message "whole line (%s, %s)" (point) limit)
   (while (and (> limit (point)) (re-search-forward (concat
                             "^[ \t]*\\(?:"
                             sleet-re-tag-name "\\|"
@@ -75,14 +75,21 @@ LIMIT the end position to do search."
                             sleet-re-id-selector "\\)")
                             limit t))
     (when (match-string 1) (put-text-property (match-beginning 1) (match-end 1) 'face font-lock-function-name-face))
-    (when (match-string 2) (put-text-property (match-beginning 2) (match-end 2) 'face font-lock-type-face))
+    (when (match-string 2)
+      (let ((str (match-string 2)) (sb (match-beginning 2)) (se (match-end 2)))
+        (cond
+         ((string= "# " str) (put-text-property sb se 'face font-lock-comment-face))
+         ((string= "#." str) (put-text-property sb se 'face font-lock-comment-face) (backward-char))
+         ((string= "|" (match-string 2)) (put-text-property sb se 'face font-lock-string-face))
+         (t (put-text-property sb se 'face font-lock-type-face)))))
     (when (match-string 3) (put-text-property (match-beginning 3) (match-end 3) 'face font-lock-constant-face))
     (when (match-string 4) (put-text-property (match-beginning 4) (match-end 4) 'face font-lock-constant-face))
-    (sleet-highlight-following-selectors (line-end-position))
-    (sleet-highlight-attribute-groups limit)
-    (sleet-highlight-inline-tags limit)
-    (sleet-highlight-text-block)
-    ))
+    (let ((tag-name (match-string 2)))
+      (sleet-highlight-following-selectors (line-end-position))
+      (sleet-highlight-attribute-groups limit)
+      (sleet-highlight-inline-tags limit)
+      (sleet-highlight-text-block tag-name)
+      )))
 
 (defun sleet-highlight-inline-tags (limit)
   "Highlight inline tags.
@@ -101,9 +108,10 @@ LIMIT the end position to do search."
     (when (match-string 4) (put-text-property (match-beginning 4) (match-end 4) 'face font-lock-constant-face))
     (when (match-string 5) (put-text-property (match-beginning 5) (match-end 5) 'face font-lock-constant-face))
     (goto-char (match-end 0))
-    (sleet-highlight-following-selectors (line-end-position))
-    (sleet-highlight-attribute-groups limit)
-    (sleet-highlight-text-block)))
+    (let ((tag-name (match-string 3)))
+      (sleet-highlight-following-selectors (line-end-position))
+      (sleet-highlight-attribute-groups limit)
+      (sleet-highlight-text-block tag-name))))
 
 (defun sleet-highlight-following-selectors (limit)
   "Highlight following class selector or id selector
@@ -119,7 +127,13 @@ LIMIT is the end position to do search"
   (while (looking-at "[ \t]*(")
     (goto-char (match-end 0))
     (sleet-highlight-attribute-pair 0)
-    (when (re-search-forward ")" limit t))))
+    (when (re-search-forward ")" limit t)
+
+      ;; highlight group helper
+      (when (looking-at (concat "[ \t]*&[ \t]*" sleet-re-identifier))
+        (put-text-property (match-beginning 0) (match-end 0) 'face font-lock-function-name-face)
+        (goto-char (match-end 0))
+        (sleet-highlight-attribute-groups limit)))))
 
 (defun sleet-highlight-attribute-pair (helper-count)
   "Highlight attribute pairs.
@@ -160,7 +174,7 @@ HELPER-COUNT is used to match helper."
             (setq hc (1+ hc)))
 
           ;; identifier
-          (when (match-string 9) (put-text-property (match-beginning 9) (match-end 9) 'face font-lock-variable-name-face))
+          (when (match-string 9) (put-text-property (match-beginning 9) (match-end 9) 'face font-lock-keyword-face))
           (goto-char (match-end 0))
           (sleet-highlight-attribute-pair hc))
 
@@ -168,14 +182,19 @@ HELPER-COUNT is used to match helper."
         (goto-char (match-end 0))
         (sleet-highlight-attribute-pair (1- hc))))))
 
-(defun sleet-highlight-text-block ()
+(defun sleet-highlight-text-block (tag-name)
   "Skip text block."
   (when (looking-at "[ \t]*\\.[ \t]*$")
-    (beginning-of-line)
-    (looking-at "[ \t]*")
-    (forward-line 1)
-    (when (looking-at (concat "\\(^" (match-string 0) "[ \t]+[^\n]*\n\\|^[ \t]*\n\\)+"))
-      (goto-char (match-end 0)))))
+    (let ((face-name (cond
+                      ((string= "#." tag-name) font-lock-comment-face)
+                      ((string= "|" tag-name) font-lock-string-face)
+                      (t font-lock-string-face))))
+      (beginning-of-line)
+      (looking-at "[ \t]*")
+      (forward-line 1)
+      (when (looking-at (concat "\\(^" (match-string 0) "[ \t]+[^\n]*\n\\|^[ \t]*\n\\)+"))
+        (put-text-property (match-beginning 0) (match-end 0) 'face face-name)
+        (goto-char (match-end 0))))))
 
 (defun sleet-re-gen-block (re)
   "return a regexp to match sleet block.
@@ -276,8 +295,10 @@ This will return a cons present the matched region."
       (when result
         (message "set region beginning to %s" result)
 
+        (put-text-property (car result) (cdr result) 'font-lock-multiline t)
         ;; use orignial end
-        result
+        ;; result
+        nil
         ))))
 
 (defconst sleet-font-lock-keywords
@@ -291,7 +312,7 @@ This will return a cons present the matched region."
     ;; ("^[ \t]*\\([#.][a-zA-Z$@_0-9\-]+\\)" . font-lock-constant-face)
     ;; (sleet-re-whole-line . font-lock-constant-face)
     sleet-highlight-whole-line
-    sleet-highlight-comment-block
+    ;; sleet-highlight-comment-block
     ))
 
 (defvar sleet-mode-syntax-table
