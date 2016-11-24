@@ -12,31 +12,34 @@
       (match-string 1))))
 
 (defconst sleet-re-identifier "[a-zA-Z$@_][a-zA-Z0-9$_\-]*")
-(defconst sleet-re-tag-name (concat "\\(" sleet-re-identifier ":\\)?" sleet-re-identifier))
-(defconst sleet-re-class-selector (concat "\\." sleet-re-identifier))
-(defconst sleet-re-id-selector (concat "#" sleet-re-identifier))
-(defconst sleet-re-inline-indicator "[><:+][ \t]+")
+(defconst sleet-re-tag-name (concat "\\(" sleet-re-identifier ":\\)?\\(" sleet-re-identifier "\\)"))
+(defconst sleet-re-class-selector (concat "\\(\\." sleet-re-identifier "\\)"))
+(defconst sleet-re-id-selector (concat "\\(#" sleet-re-identifier "\\)"))
+(defconst sleet-re-inline-indicator "\\([><:+][ \t]+\\)")
 (defconst sleet-re-attribute-key (concat
                                   ;; namespace
                                   "\\(" sleet-re-identifier ":\\)?"
 
                                   ;; key content
-                                  "[^ \t=)]+"))
+                                  "\\([^ \t=)]+\\)"))
 (defconst sleet-re-attribute-value (concat
                                     ;; + prefix
-                                    "[ \t]*\\(+[ \t]*\\)?\\("
+                                    "[ \t]*\\(+[ \t]*\\)?\\(?:"
 
                                     ;; quoted string
-                                    "[\"'][^\"']+[\"']\\|"
+                                    "\\([\"'][^\"']+[\"']\\)\\|"
 
                                     ;; numbers
-                                    "[0-9]+\\|"
+                                    "\\([0-9]+\\)\\|"
 
                                     ;; boolean
                                     "\\(true\\|false\\)\\|"
 
+                                    ;; helper
+                                    "\\(" sleet-re-identifier "\\)(\\|"
+
                                     ;; identifier
-                                    "[^ \t\n)+]+\\)"
+                                    "\\([^ \t\n)+=]+\\)\\)"
                                     ))
 
 (defconst sleet-re-whole-line (concat
@@ -58,6 +61,121 @@
                                ;; attribute end
                                "\\)+[ \t]*)\\)?[ \t]*\n*"
                                ))
+
+(defun sleet-highlight-whole-line (limit)
+  "Highlight line.
+LIMIT the end position to do search."
+
+  ;; start with tag name or class selector or id selector
+  (message "whole line (%s, %s)" (point) limit)
+  (while (and (> limit (point)) (re-search-forward (concat
+                            "^[ \t]*\\(?:"
+                            sleet-re-tag-name "\\|"
+                            sleet-re-class-selector "\\|"
+                            sleet-re-id-selector "\\)")
+                            limit t))
+    (when (match-string 1) (put-text-property (match-beginning 1) (match-end 1) 'face font-lock-function-name-face))
+    (when (match-string 2) (put-text-property (match-beginning 2) (match-end 2) 'face font-lock-type-face))
+    (when (match-string 3) (put-text-property (match-beginning 3) (match-end 3) 'face font-lock-constant-face))
+    (when (match-string 4) (put-text-property (match-beginning 4) (match-end 4) 'face font-lock-constant-face))
+    (sleet-highlight-following-selectors (line-end-position))
+    (sleet-highlight-attribute-groups limit)
+    (sleet-highlight-inline-tags limit)
+    (sleet-highlight-text-block)
+    ))
+
+(defun sleet-highlight-inline-tags (limit)
+  "Highlight inline tags.
+LIMIT the end position to do search."
+  (while (looking-at (concat
+                      "[ \t]*"
+                      sleet-re-inline-indicator
+                      "\\(?:"
+                      sleet-re-tag-name "\\|"
+                      sleet-re-class-selector "\\|"
+                      sleet-re-id-selector "\\)"))
+
+    (when (match-string 1) (put-text-property (match-beginning 1) (match-end 1) 'face font-lock-keyword-face))
+    (when (match-string 2) (put-text-property (match-beginning 2) (match-end 2) 'face font-lock-function-name-face))
+    (when (match-string 3) (put-text-property (match-beginning 3) (match-end 3) 'face font-lock-type-face))
+    (when (match-string 4) (put-text-property (match-beginning 4) (match-end 4) 'face font-lock-constant-face))
+    (when (match-string 5) (put-text-property (match-beginning 5) (match-end 5) 'face font-lock-constant-face))
+    (goto-char (match-end 0))
+    (sleet-highlight-following-selectors (line-end-position))
+    (sleet-highlight-attribute-groups limit)
+    (sleet-highlight-text-block)))
+
+(defun sleet-highlight-following-selectors (limit)
+  "Highlight following class selector or id selector
+LIMIT is the end position to do search"
+  (while (looking-at (concat "\\(?:" sleet-re-class-selector "\\|" sleet-re-id-selector "\\)"))
+    (put-text-property (match-beginning 0) (match-end 0) 'face font-lock-constant-face)
+    (goto-char (match-end 0))
+    ))
+
+(defun sleet-highlight-attribute-groups (limit)
+  "Highlight attribute groups
+LIMIT is the end position to do search"
+  (while (looking-at "[ \t]*(")
+    (goto-char (match-end 0))
+    (sleet-highlight-attribute-pair 0)
+    (when (re-search-forward ")" limit t))))
+
+(defun sleet-highlight-attribute-pair (helper-count)
+  "Highlight attribute pairs.
+HELPER-COUNT is used to match helper."
+  (let ((hc helper-count))
+    (if (looking-at (concat
+                     "[ \t\n]*\\(?:"
+                     sleet-re-attribute-key
+                     "[ \t]*\\(=\\)\\)?"
+                     sleet-re-attribute-value
+                     ))
+        (progn
+
+          ;; attribute key namespace
+          (when (match-string 1) (put-text-property (match-beginning 1) (match-end 1) 'face font-lock-function-name-face))
+
+          ;; attribute key
+          (when (match-string 2) (put-text-property (match-beginning 2) (match-end 2) 'face font-lock-variable-name-face))
+
+          ;; =
+          (when (match-string 3) (put-text-property (match-beginning 3) (match-end 3) 'face font-lock-constant-face))
+
+          ;; +
+          (when (match-string 4) (put-text-property (match-beginning 4) (match-end 4) 'face font-lock-constant-face))
+
+          ;; quoted string
+          (when (match-string 5) (put-text-property (match-beginning 5) (match-end 5) 'face font-lock-string-face))
+
+          ;; numbers
+          (when (match-string 6) (put-text-property (match-beginning 6) (match-end 6) 'face font-lock-keyword-face))
+
+          ;; true false
+          (when (match-string 7) (put-text-property (match-beginning 7) (match-end 7) 'face font-lock-keyword-face))
+
+          ;; helper, when helper is found, extend the end of attribute group to next ")"
+          (when (match-string 8)
+            (put-text-property (match-beginning 8) (match-end 8) 'face font-lock-function-name-face)
+            (setq hc (1+ hc)))
+
+          ;; identifier
+          (when (match-string 9) (put-text-property (match-beginning 9) (match-end 9) 'face font-lock-variable-name-face))
+          (goto-char (match-end 0))
+          (sleet-highlight-attribute-pair hc))
+
+      (when (and (> hc 0) (looking-at "[ \t]*)"))
+        (goto-char (match-end 0))
+        (sleet-highlight-attribute-pair (1- hc))))))
+
+(defun sleet-highlight-text-block ()
+  "Skip text block."
+  (when (looking-at "[ \t]*\\.[ \t]*$")
+    (beginning-of-line)
+    (looking-at "[ \t]*")
+    (forward-line 1)
+    (when (looking-at (concat "\\(^" (match-string 0) "[ \t]+[^\n]*\n\\|^[ \t]*\n\\)+"))
+      (goto-char (match-end 0)))))
 
 (defun sleet-re-gen-block (re)
   "return a regexp to match sleet block.
@@ -83,32 +201,11 @@ RE is used to match block start to identify what kind of block will be matched."
 (defconst sleet-re-text-block (sleet-re-gen-block "|")
   "Text block start by |.")
 
-(defun sleet-highlight-whole-line (limit)
-  (when (re-search-forward sleet-re-whole-line limit t)
-    (message "matched: %s" (match-string 0))
-    (message "matched: %s" (match-string 1))
-    (message "matched: %s" (match-string 2))
-    (message "matched: %s" (match-string 3))
-    (message "matched: %s" (match-string 4))
-    (message "matched: %s" (match-string 5))
-    (message "matched: %s" (match-string 6))
-    (message "matched: %s" (match-string 7))
-    (message "matched: %s" (match-string 8))
-    (message "matched: %s" (match-string 9))
-    t))
-
 (defun sleet-highlight-comment-block (limit)
   "Highlight comment block.
 LIMIT is feeded by font-lock."
   (when (re-search-forward sleet-re-comment-block limit t)
     (put-text-property (match-beginning 0) (match-end 0) 'face font-lock-comment-face)
-    t))
-
-(defun sleet-highlight-text-block (limit)
-  "Highlight text block.
-LIMIT is feeded by font-lock."
-  (when (re-search-forward sleet-re-text-block limit t)
-    (put-text-property (match-beginning 0) (match-end 0) 'face font-lock-string-face)
     t))
 
 (defun sleet-font-lock-extend-end-of-region ()
@@ -146,42 +243,41 @@ So this function only have to ensure the END of the region."
 (defun sleet-font-lock-find-parent (beg)
   "Recursive find parent to determine if current line is content of block.
 BEG is the point to start search.
-return the start point of the found block otherwise return nil"
+return the (start end) of the found block otherwise return nil"
 
   (goto-char beg) (beginning-of-line)
 
-  ;; get the indent of current line
-  (when (re-search-forward "^\\([ \t]+\\)[^ \t]+" (line-end-position) t)
-    (let ((token-length (1- (length (match-string 1)))))
+  ;; test if current line ends up with a DOT
+  (if (re-search-forward "^\\([ \t]*\\)[^\n]+\\.[ \t]*$" (line-end-position) t)
 
-      ;; backward find the line have less indent
-      (when (re-search-backward (concat "^\\([ \t]\\)\\{," (number-to-string token-length) "\\}[^ \t\n]+") nil t)
+      ;; find the block end point
+      (progn
+        (let ((start (line-beginning-position)))
+          (when (re-search-forward (concat "\\(^" (match-string 1) "[ \t]+[^\n]*\n\\|^[ \t]*\n\\)+") nil t)
+            (cons start (match-end 0)))))
 
-        (beginning-of-line)
-        ;; store the start point
-        (let ((result (match-beginning 0)))
+    ;; find the parent of current line
+    ;; get the indent of current line
+    (when (re-search-forward "^\\([ \t]+\\)[^ \t]+" (line-end-position) t)
+      (let ((token-length (1- (length (match-string 1)))))
 
-          ;; test if the current line ends up with a dot
-          (if (re-search-forward "^[ \t]*[^\n]+\\.[ \t]*$" (line-end-position) t)
-
-              ;; return the start point of block
-              result
-
-            ;; find the parent of current line
-            (sleet-font-lock-find-parent result)))))))
+        ;; backward find the line have less indent
+        (when (re-search-backward (concat "^\\([ \t]\\)\\{," (number-to-string token-length) "\\}[^ \t\n]+") nil t)
+          (sleet-font-lock-find-parent (match-beginning 0)))))))
 
 (defun sleet-font-lock-extend-beginning-of-region (beg end old-len)
   "This function is used as after-change-hook.
 
 BEG END OLD-LEN are all feeded by font-lock.
 This will return a cons present the matched region."
+  (message "after change %s %s" beg end)
   (save-excursion
     (let ((result (sleet-font-lock-find-parent beg)))
       (when result
         (message "set region beginning to %s" result)
 
         ;; use orignial end
-        (cons result end)
+        result
         ))))
 
 (defconst sleet-font-lock-keywords
@@ -196,7 +292,6 @@ This will return a cons present the matched region."
     ;; (sleet-re-whole-line . font-lock-constant-face)
     sleet-highlight-whole-line
     sleet-highlight-comment-block
-    sleet-highlight-text-block
     ))
 
 (defvar sleet-mode-syntax-table
@@ -222,6 +317,7 @@ This will return a cons present the matched region."
   ;; (setq font-lock-extend-region-functions '(sleet-font-lock-extend-end-of-region))
   ;; (make-local-variable 'font-lock-extend-region-functions)
   ;; (add-to-list 'font-lock-extend-region-functions 'sleet-font-lock-extend-end-of-region t)
+  (set (make-local-variable 'font-lock-extend-after-change-region-function) 'sleet-font-lock-extend-beginning-of-region)
   )
 
 (add-to-list 'auto-mode-alist '("\\.sleet$" . sleet-mode))
