@@ -4,12 +4,66 @@
 
 ;;; Code:
 
+(defgroup sleet nil
+  "A Sleet major mode."
+  :group 'languages)
+
+(defcustom sleet-indent-token "    "
+  "Default indent token")
+
 (defun sleet-find-indent-token ()
   "Find The first."
+  (interactive)
   (save-excursion
     (goto-char (point-min))
-    (when (re-search-forward "\n\\([ \t]+\\)[^ \t]+")
-      (match-string 1))))
+    (or
+     (when (re-search-forward "\n\\([ \t]+\\)[^ \t]+" nil t) (match-string 1))
+     sleet-indent-token)))
+
+(defun sleet-indent-line ()
+  ())
+
+
+(defun sleet-comment-dwim (arg)
+  (interactive "*P")
+  (if (use-region-p)
+      (sleet-comment-uncomment-region)
+    (sleet-comment-uncomment-line)))
+
+(defun sleet-comment-uncomment-line ()
+  (save-excursion
+    (goto-char (point-at-bol))
+    (if (looking-at "^[ \t]*# ")
+        (uncomment-region (point-at-bol) (point-at-eol))
+      (comment-region (point-at-bol) (point-at-eol)))))
+
+(defun sleet-comment-uncomment-region ()
+  (save-excursion
+    (let ((beg (region-beginning)) (end (region-end)))
+      (goto-char beg)
+      (setq beg (point-at-bol))
+
+      (goto-char end)
+      (if (eq end (point-at-bol)) (backward-char) (goto-char (point-at-eol)))
+      (setq end (point))
+
+      (if (sleet-all-line-commented-p beg end)
+          (uncomment-region beg end)
+
+        (goto-char beg)
+        (while (< (point) end)
+          (when (not (looking-at "^[ \t]*# ")) (comment-or-uncomment-region (point) (point-at-eol)))
+          (forward-line))))))
+
+(defun sleet-all-line-commented-p (beg end)
+  (let ((result t))
+    (goto-char beg)
+    (while (and result (< (point) end))
+      (if (looking-at "\\([ \t]*# \\|^[ \t]*\n\\)")
+          (forward-line)
+        (setq result nil)))
+
+    result))
 
 (defconst sleet-re-identifier "[a-zA-Z$@_][a-zA-Z0-9$_\-]*")
 (defconst sleet-re-tag-name (concat "\\(" sleet-re-identifier ":\\)?\\(" sleet-re-identifier "\\|#\\(?: \\|\\.\\)\\||\\)"))
@@ -318,8 +372,7 @@ This will return a cons present the matched region."
 (defvar sleet-mode-syntax-table
   (let ((table (make-syntax-table)))
     (modify-syntax-entry ?_ "w" table)
-    (modify-syntax-entry ?# ". 1" table)
-    (modify-syntax-entry ?\  ". 2" table)
+    (modify-syntax-entry ?# "<" table)
     (modify-syntax-entry ?\n ">" table)
     (modify-syntax-entry ?\' "w" table)
     table)
@@ -330,15 +383,18 @@ This will return a cons present the matched region."
 
   (set-syntax-table sleet-mode-syntax-table)
 
-  (set (make-local-variable 'comment-start) "\\(# \\)")
+  (set (make-local-variable 'comment-start) "# ")
+  (set (make-local-variable 'comment-start-skip) "# [ \t]*")
   (set (make-local-variable 'comment-end) "")
-
   (set (make-local-variable 'font-lock-multiline) t)
   (setq font-lock-defaults '(sleet-font-lock-keywords))
   ;; (setq font-lock-extend-region-functions '(sleet-font-lock-extend-end-of-region))
   ;; (make-local-variable 'font-lock-extend-region-functions)
   ;; (add-to-list 'font-lock-extend-region-functions 'sleet-font-lock-extend-end-of-region t)
   (set (make-local-variable 'font-lock-extend-after-change-region-function) 'sleet-font-lock-extend-beginning-of-region)
+
+  (define-key sleet-mode-map [remap comment-dwim] 'sleet-comment-dwim)
+
   )
 
 (add-to-list 'auto-mode-alist '("\\.sleet$" . sleet-mode))
