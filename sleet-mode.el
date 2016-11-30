@@ -13,7 +13,6 @@
 
 (defun sleet-indent-find-token ()
   "Find The first."
-  (interactive)
   (save-excursion
     (goto-char (point-min))
     (or
@@ -21,56 +20,114 @@
      (when (re-search-forward "\n\\(\t+\\)[^ \t]+" nil t) (match-string 1))
      sleet-indent-token)))
 
-(defun sleet-indent-find-previous-indent (token)
+(defun sleet-indent-first-line-p ()
+  (save-excursion
+    (beginning-of-line)
+    (let ((p (point)))
+      (goto-char (point-min))
+      (while (looking-at "^[ \t]*$") (forward-line))
+      (eq p (point)))))
+
+(defun sleet-indent-make-indent (count token)
+  (let ((result ""))
+    (when (> count 0)
+      (dotimes (i count)
+        (setq result (concat result token))))
+    result))
+
+(defun sleet-indent-get-current-indent (token-length)
+  (looking-at "^[ \t]*")
+  (/ (length (match-string 0)) token-length))
+
+(defun sleet-indent-get-previous-indent (token-length)
   (save-excursion
     (forward-line -1)
     (while (looking-at "^[ \t]*$") (forward-line -1))
-    (looking-at (concat "^\\(" token "\\)*"))
-    (match-string 0)))
+    (sleet-indent-get-current-indent token-length)))
+
+(defun sleet-indent-to (count token)
+  (save-excursion
+    (beginning-of-line)
+    (looking-at "^[ \t]*")
+    (replace-match (sleet-indent-make-indent count token))))
 
 (defun sleet-indent-line ()
-  (let ((token (sleet-indent-find-token)) previous-indent current-length previous-length token-length)
-    (setq previous-indent (sleet-indent-find-previous-indent token))
-    (setq previous-length (length previous-indent) token-length (length token))
+  (let ((token (sleet-indent-find-token)) previous current delta token-length)
+    (if (sleet-indent-first-line-p)
+        (sleet-indent-to 0 token)
+      (setq token-length (length token))
+      (setq previous (sleet-indent-get-previous-indent token-length))
 
-    (save-excursion
-      (beginning-of-line)
-      (looking-at "^[ \t]*")
-      (setq current-length (length (match-string 0)))
+      (save-excursion
+        (beginning-of-line)
+        (setq current (sleet-indent-get-current-indent token-length))
+        (setq delta (- current previous)))
 
       (cond
-       ((< current-length previous-length) (replace-match previous-indent))
-       ((eq current-length previous-length) (replace-match (concat previous-indent token)))
-       ((and (> current-length previous-length)
-             (< current-length (+ previous-length token-length))) (replace-match (concat previous-indent token)))
-       ((eq current-length (+ previous-length token-length)) (replace-match previous-indent))
-       ((> current-length (+ previous-length token-length)) (replace-match (concat previous-indent token)))
-       ))))
+       ((<= delta 0) (setq current (1+ current)))
+       ((> delta 1) (setq current (1+ previous)))
+       (t (setq current previous))
+       )
 
-(defun sleet-indent-correct-indent (token beg end)
+      (sleet-indent-to current token))))
+
+(defun sleet-indent-get-region-indents (beg end token-length previous)
   (save-excursion
-    (let ((token-length (length token)) (changed nil))
-      (goto-char beg)
-      (beginning-of-line)
+    (goto-char beg)
+    (beginning-of-line)
+    (let ((indents '()) (p previous) c)
       (while (< (point) end)
-        (unless (looking-at "^[ \t]*$")
-          (looking-at "^[ \t]*")
-          (unless (eq (% (length (match-string 0)) token-length) 0)
-            (sleet-indent-line)
-            (setq changed t)))
-        (forward-line 1))
-      changed)))
+        (while (looking-at "^[ \t]*$") (forward-line))
+        (setq c (sleet-indent-get-current-indent token-length))
+        (setq indents (cons (- c p) indents))
+        (setq p c)
+        (forward-line))
+      (reverse indents))))
+
+(defun sleet-indent-apply-region-indents (beg end token previous indents)
+  (save-excursion
+    (goto-char beg)
+    (beginning-of-line)
+    (let ((p previous))
+      (mapcar (lambda (item)
+                (setq p (+ p item))
+                (while (looking-at "^[ \t]*$") (forward-line))
+                (sleet-indent-to p token)
+                (forward-line))
+              indents))))
 
 (defun sleet-indent-region (beg end)
   (save-excursion
     (goto-char beg)
-    (if (and (<= beg (point-at-eol))
-             (<= end (point-at-eol)))
-        (sleet-indent-line)
-      (let ((token (sleet-indent-find-token)))
-        (setq changed (sleet-indent-correct-indent token beg end))
-        (unless changed
-          )))))
+    (if (<= end (point-at-eol)) (sleet-indent-line)
+      (let ((token (sleet-indent-find-token)) indents token-length previous (is-first-line (sleet-indent-first-line-p)))
+        (setq token-length (length token))
+        (setq previous (sleet-indent-get-previous-indent token-length))
+
+        (setq indents (mapcar
+                       (lambda (item) (if (> item 1) 1 item))
+                       (sleet-indent-get-region-indents beg end token-length previous)))
+        (if is-first-line
+            (setcar indents 0)
+          (when (< (car indents) 1) (setcar indents (1+ (car indents)))))
+
+        (sleet-indent-apply-region-indents beg end token previous indents)))))
+
+(defun sleet-unindent ()
+  (interactive)
+  (save-excursion
+    (let ((token (sleet-indent-find-token)) token-length)
+      (setq token-length (length token))
+      (if (use-region-p)
+          (let ((beg (region-beginning)) (end (region-end)) previous indents)
+            (goto-char beg) (beginning-of-line)
+            (setq previous (sleet-indent-get-previous-indent token-length))
+            (setq indents (sleet-indent-get-region-indents beg end token-length previous))
+            (when (> (car indents) 2) (setcar indents 2))
+            (setcar indents (1- (car indents)))
+            (sleet-indent-apply-region-indents beg end token previous indents))
+        (beginning-of-line)
+        (sleet-indent-to (1- (sleet-indent-get-current-indent token-length)) token)))))
 
 (defun sleet-comment-dwim (arg)
   (interactive "*P")
@@ -393,15 +450,16 @@ BEG END OLD-LEN are all feeded by font-lock.
 This will return a cons present the matched region."
   (message "after change %s %s" beg end)
   (save-excursion
-    (let ((result (sleet-font-lock-find-parent beg)))
-      (when result
-        (message "set region beginning to %s" result)
+    (save-match-data
+      (let ((result (sleet-font-lock-find-parent beg)))
+        (when result
+          (message "set region beginning to %s" result)
 
-        (put-text-property (car result) (cdr result) 'font-lock-multiline t)
-        ;; use orignial end
-        ;; result
-        nil
-        ))))
+          (put-text-property (car result) (cdr result) 'font-lock-multiline t)
+          ;; use orignial end
+          ;; result
+          nil
+          )))))
 
 (defconst sleet-font-lock-keywords
   `(("doctype" . font-lock-comment-face)
@@ -445,7 +503,7 @@ This will return a cons present the matched region."
   (setq-local indent-region-function 'sleet-indent-region)
 
   (define-key sleet-mode-map [remap comment-dwim] 'sleet-comment-dwim)
-
+  (define-key sleet-mode-map [backtab] 'sleet-unindent)
   )
 
 (add-to-list 'auto-mode-alist '("\\.sleet$" . sleet-mode))
